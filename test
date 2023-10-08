@@ -1,0 +1,157 @@
+#include <errno.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/select.h> // to use fd_set
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
+void ft_putstr(char *str) {
+    int i = 0;
+    while (str[i]) {
+        write(2, &str[i], 1);
+        i++;
+    }
+}
+
+struct Client {
+    int id;
+    int socket_fd;
+    char *buffer;
+};
+
+struct Client clientList[SOMAXCONN];
+int next_id = 0;
+
+int getClientId(int socket) {
+    for (int i = 0; i < next_id; i++) {
+        if (clientList[i].socket_fd == socket) {
+            return clientList[i].id;
+        }
+    }
+    return -1;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        ft_putstr("Wrong number of arguments\n");
+        exit(1);
+    }
+	char* write_buffer = (char*)malloc(4000000 * sizeof(char));
+	if (!write_buffer){
+		ft_putstr("Fatal error in malloc write_buffer\n");
+		exit(1);
+	}
+	write_buffer[0] = '\0';
+    // int clientList[SOMAXCONN];
+    fd_set activeSockets, readySockets;
+
+    // socket create and verification
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (sockfd < 0) {
+        ft_putstr("Fatal error in socket creation\n");
+        exit(1);
+    }
+
+    struct sockaddr_in servaddr = {0};
+
+    // assign IP, PORT
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); //127.0.0.1
+    servaddr.sin_port = htons(atoi(argv[1]));
+
+    // Binding newly created socket to given IP and verification
+    if ((bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0) {
+        ft_putstr("Fatal error in binding\n");
+        close(sockfd);
+        exit(1);
+    }
+
+    if (listen(sockfd, SOMAXCONN) != 0) {
+        ft_putstr("Fatal error in listening\n");
+        close(sockfd);
+        exit(1);
+    }
+
+    FD_ZERO(&activeSockets);
+    FD_SET(sockfd, &activeSockets);
+    int maxSocket = sockfd;
+
+	while (1) {
+    readySockets = activeSockets;
+    if (select(maxSocket + 1, &readySockets, NULL, NULL, NULL) < 0) {
+        ft_putstr("Error in select\n");
+        close(sockfd);
+        exit(1);
+    }
+
+    for (int socketId = 0; socketId <= maxSocket; socketId++) {
+        if (FD_ISSET(socketId, &readySockets)) {
+            if (socketId == sockfd) {
+                int clientSocket = accept(sockfd, NULL, NULL);
+                if (clientSocket < 0) {
+                    ft_putstr("Error accept (not specified in subject)\n");
+                    close(sockfd);
+                    exit(1);
+                }
+                FD_SET(clientSocket, &activeSockets);
+                maxSocket = (clientSocket > maxSocket) ? clientSocket : maxSocket;
+				struct Client newClient;
+                newClient.id = next_id;
+                newClient.socket_fd = clientSocket;
+                newClient.buffer = (char *)malloc(4000000 * sizeof(char));
+                if (!newClient.buffer) {
+                    ft_putstr("Fatal error in malloc client buffer\n");
+                    close(sockfd);
+                    exit(1);
+                }
+                newClient.buffer[0] = '\0';
+                newClient.buffer[0] = '\0';
+                clientList[next_id++] = newClient;
+				for (int i = 0; i < next_id - 1; i++) {
+					sprintf(clientList[i].buffer, "server: client %d just arrived\n", next_id - 1);
+					send(clientList[i].socket_fd, clientList[i].buffer, strlen(clientList[i].buffer), 0);
+    			}
+            } else {
+				int clientId = getClientId(socketId);
+				if (clientId != -1 && clientList[clientId].socket_fd != -1) {
+					int bytesRead = recv(socketId, clientList[clientId].buffer, 4000000, 0);
+					if (bytesRead <= 0) {
+						// Client disconnected
+						sprintf(clientList[clientId].buffer, "server: client %d disconnected\n", clientId);
+						for (int i = 0; i < next_id; i++) {
+							if (clientList[i].socket_fd != socketId) {
+								send(clientList[i].socket_fd, clientList[clientId].buffer, strlen(clientList[clientId].buffer), 0);
+							}
+						}
+						clientList[clientId].buffer[0] = '\0';
+						free(clientList[clientId].buffer);
+						clientList[clientId].socket_fd = -1;
+						FD_CLR(socketId, &activeSockets);
+						close(socketId);
+					} else {
+						// Process received data
+						clientList[clientId].buffer[bytesRead] = '\0';
+						sprintf(write_buffer, "client %d: %s\n", clientList[clientId].id, clientList[clientId].buffer);
+						for (int i = 0; i < next_id; i++) {
+							if (clientList[i].socket_fd != socketId) {
+								send(clientList[i].socket_fd, write_buffer, strlen(write_buffer), 0);
+							}
+						}
+					}
+				} else {
+					// Invalid client socket
+					ft_putstr("Invalid client socket\n");
+					close(socketId);
+				}
+
+            }
+        }
+    }
+}
+	free(write_buffer);
+	return (0);
+}
+
